@@ -33,6 +33,41 @@ pub const Node = union(NodeKind) {
     },
     monotext: []const u8,
     text: []const u8,
+
+    pub fn toHtml(self: *Node, out: *std.io.Writer) !void {
+        switch (self.*) {
+            .document => |d| {
+                for (d.children.items) |node| {
+                    try node.toHtml(out);
+                }
+            },
+            .text => |c| {
+                try out.printAscii(c, .{});
+            },
+            .codeBlock => |cb| {
+                try out.print("<pre><code>{s}</code></pre>", .{cb.code});
+            },
+            .monotext => |c| {
+                try out.print("<code>{s}</code>", .{c});
+            },
+            .link => |c| {
+                try out.print("<a href=\"{s}\">{s}</a>", .{ c.address, c.content });
+            },
+            .heading => |h| {
+                try out.print("<h{d}>{s}</h{d}>\n", .{ h.level, h.content, h.level });
+            },
+            .paragraph => |p| {
+                try out.print("<p>", .{});
+
+                for (p) |node| {
+                    try node.toHtml(out);
+                }
+
+                try out.print("</p>\n", .{});
+            },
+            else => {},
+        }
+    }
 };
 
 pub fn deinitNode(allocator: std.mem.Allocator, node: *Node) void {

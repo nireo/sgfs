@@ -9,7 +9,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
-    if (args.len < 2) {
+    if (args.len < 3) {
         std.debug.print("Usage: program <filename>\n", .{});
         return;
     }
@@ -20,22 +20,24 @@ pub fn main() !void {
     const contents = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
     defer alloc.free(contents);
 
-    std.debug.print("File contents:\n{s}\n", .{contents});
-
     var p = try md.Parser.init(alloc, contents);
     var res = try p.parse();
     defer res.deinit(alloc);
 
-    var out: std.io.Writer.Allocating = .init(alloc);
-    try std.json.Stringify.value(res.root.document.children, .{ .whitespace = .indent_2 }, &out.writer);
-    var arr = out.toArrayList();
-    defer arr.deinit(alloc);
+    if (std.mem.eql(u8, args[2], "-dump")) {
+        var out: std.io.Writer.Allocating = .init(alloc);
+        try std.json.Stringify.value(res.root.document.children, .{ .whitespace = .indent_2 }, &out.writer);
+        var arr = out.toArrayList();
+        defer arr.deinit(alloc);
 
-    std.debug.print("File contents:\n{s}\n", .{arr.items});
+        std.debug.print("\n{s}\n", .{arr.items});
+    } else if (std.mem.eql(u8, args[2], "-html")) {
+        var htmlOut: std.io.Writer.Allocating = .init(alloc);
+        try res.root.toHtml(&htmlOut.writer);
 
-    std.debug.print("got metadata:\n", .{});
-    var it = res.metadata.iterator();
-    while (it.next()) |entry| {
-        std.debug.print("{s}: {s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        var htmlContent = htmlOut.toArrayList();
+        defer htmlContent.deinit(alloc);
+
+        std.debug.print("{s}", .{htmlContent.items});
     }
 }
