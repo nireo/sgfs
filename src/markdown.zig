@@ -14,6 +14,7 @@ pub const NodeKind = enum {
 pub const Node = union(NodeKind) {
     document: struct {
         children: std.ArrayList(*Node),
+        metadata: std.StringHashMap([]const u8),
     },
     heading: struct {
         level: u8,
@@ -43,6 +44,7 @@ pub fn deinitNode(allocator: std.mem.Allocator, node: *Node) void {
                 allocator.destroy(child);
             }
             doc.children.deinit(allocator);
+            doc.metadata.deinit();
         },
         .paragraph => |children| {
             for (children) |child| {
@@ -64,6 +66,9 @@ pub fn deinitNode(allocator: std.mem.Allocator, node: *Node) void {
 
 pub const ParserError = error{WrongCodeBlock};
 
+/// Parser is a very simplistic markdown parser. It currently does *NOT* handle incorrect markdown properly.
+/// It excepts the markdown to be formatted correctly. This is just for a toy project and my own files that's
+/// why it doesn't matter.
 pub const Parser = struct {
     allocator: std.mem.Allocator,
     loc: usize,
@@ -150,7 +155,33 @@ pub const Parser = struct {
     }
 
     pub fn parse(p: *Parser) !*Node {
-        // check the current location
+        var metadata = std.StringHashMap([]const u8).init(p.allocator);
+        if (std.mem.startsWith(u8, p.sliceFromLoc(), "---")) {
+            p.loc += 3; // skip opening ---
+            if (p.loc < p.content.len and p.curr() == '\n') p.loc += 1;
+
+            while (p.loc < p.content.len) {
+                if (std.mem.startsWith(u8, p.sliceFromLoc(), "---")) {
+                    p.loc += 3;
+                    if (p.loc < p.content.len and p.curr() == '\n') p.loc += 1;
+                    break;
+                }
+
+                const key = p.sliceUntilChar(':');
+                p.loc += key.end;
+
+                if (p.loc < p.content.len and p.curr() == ':') p.loc += 1;
+                if (p.loc < p.content.len and p.curr() == ' ') p.loc += 1;
+
+                const value = p.sliceUntilChar('\n');
+                p.loc += value.end;
+
+                if (p.loc < p.content.len and p.curr() == '\n') p.loc += 1;
+
+                try metadata.put(key.content, value.content);
+            }
+        }
+
         var doclist = try std.ArrayList(*Node).initCapacity(p.allocator, 8);
 
         while (p.loc < p.content.len) {
@@ -180,6 +211,7 @@ pub const Parser = struct {
         const node = try p.allocator.create(Node);
         node.* = Node{ .document = .{
             .children = doclist,
+            .metadata = metadata,
         } };
 
         return node;
