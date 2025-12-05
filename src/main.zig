@@ -23,15 +23,19 @@ pub fn main() !void {
     std.debug.print("File contents:\n{s}\n", .{contents});
 
     var p = try md.Parser.init(alloc, contents);
-    const root = try p.parse();
+    var res = try p.parse();
+    defer res.deinit(alloc);
 
     var out: std.io.Writer.Allocating = .init(alloc);
-    try std.json.Stringify.value(root.document.children, .{ .whitespace = .indent_2 }, &out.writer);
+    try std.json.Stringify.value(res.root.document.children, .{ .whitespace = .indent_2 }, &out.writer);
     var arr = out.toArrayList();
     defer arr.deinit(alloc);
 
     std.debug.print("File contents:\n{s}\n", .{arr.items});
 
-    md.deinitNode(alloc, root);
-    alloc.destroy(root);
+    std.debug.print("got metadata:\n", .{});
+    var it = res.metadata.iterator();
+    while (it.next()) |entry| {
+        std.debug.print("{s}: {s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    }
 }

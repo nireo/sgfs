@@ -14,7 +14,6 @@ pub const NodeKind = enum {
 pub const Node = union(NodeKind) {
     document: struct {
         children: std.ArrayList(*Node),
-        metadata: std.StringHashMap([]const u8),
     },
     heading: struct {
         level: u8,
@@ -44,7 +43,6 @@ pub fn deinitNode(allocator: std.mem.Allocator, node: *Node) void {
                 allocator.destroy(child);
             }
             doc.children.deinit(allocator);
-            doc.metadata.deinit();
         },
         .paragraph => |children| {
             for (children) |child| {
@@ -65,6 +63,17 @@ pub fn deinitNode(allocator: std.mem.Allocator, node: *Node) void {
 }
 
 pub const ParserError = error{WrongCodeBlock};
+
+pub const ParserResult = struct {
+    root: *Node,
+    metadata: std.StringHashMap([]const u8),
+
+    pub fn deinit(self: *ParserResult, alloc: std.mem.Allocator) void {
+        deinitNode(alloc, self.root);
+        alloc.destroy(self.root);
+        self.metadata.deinit();
+    }
+};
 
 /// Parser is a very simplistic markdown parser. It currently does *NOT* handle incorrect markdown properly.
 /// It excepts the markdown to be formatted correctly. This is just for a toy project and my own files that's
@@ -154,7 +163,7 @@ pub const Parser = struct {
         return pNode;
     }
 
-    pub fn parse(p: *Parser) !*Node {
+    pub fn parse(p: *Parser) !ParserResult {
         var metadata = std.StringHashMap([]const u8).init(p.allocator);
         if (std.mem.startsWith(u8, p.sliceFromLoc(), "---")) {
             p.loc += 3; // skip opening ---
@@ -211,10 +220,12 @@ pub const Parser = struct {
         const node = try p.allocator.create(Node);
         node.* = Node{ .document = .{
             .children = doclist,
-            .metadata = metadata,
         } };
 
-        return node;
+        return .{
+            .metadata = metadata,
+            .root = node,
+        };
     }
 
     fn parseNodesInsideText(p: *Parser) ![]*Node {
@@ -375,15 +386,15 @@ pub const Parser = struct {
 const testing = std.testing;
 test "parse heading" {
     const content = "### Hello world\n";
-    var a = testing.allocator;
+    const a = testing.allocator;
 
     var p = try Parser.init(a, content);
 
-    const root = try p.parse();
-    defer {
-        deinitNode(a, root);
-        a.destroy(root);
-    }
+    var res = try p.parse();
+    defer res.deinit(a);
+
+    const root = res.root;
+
     try testing.expect(root.* == .document);
 
     const doc = root.document;
@@ -397,15 +408,15 @@ test "parse heading" {
 
 test "parse paragraph with heading" {
     const content = "### Hello world\nThis is a paragraph\n";
-    var a = testing.allocator;
+    const a = testing.allocator;
 
     var p = try Parser.init(a, content);
 
-    const root = try p.parse();
-    defer {
-        deinitNode(a, root);
-        a.destroy(root);
-    }
+    var res = try p.parse();
+    defer res.deinit(a);
+
+    const root = res.root;
+
     try testing.expect(root.* == .document);
 
     const doc = root.document;
@@ -423,15 +434,15 @@ test "parse paragraph with heading" {
 
 test "code block" {
     const content = "```\nprint hello world heh\n```";
-    var a = testing.allocator;
+    const a = testing.allocator;
 
     var p = try Parser.init(a, content);
 
-    const root = try p.parse();
-    defer {
-        deinitNode(a, root);
-        a.destroy(root);
-    }
+    var res = try p.parse();
+    defer res.deinit(a);
+
+    const root = res.root;
+
     try testing.expect(root.* == .document);
 
     const doc = root.document;
@@ -444,15 +455,13 @@ test "code block" {
 
 test "parse link" {
     const content = "This is a [link](https://example.com) in a paragraph\n";
-    var a = testing.allocator;
-
+    const a = testing.allocator;
     var p = try Parser.init(a, content);
 
-    const root = try p.parse();
-    defer {
-        deinitNode(a, root);
-        a.destroy(root);
-    }
+    var res = try p.parse();
+    defer res.deinit(a);
+    const root = res.root;
+
     try testing.expect(root.* == .document);
 
     const doc = root.document;
@@ -478,15 +487,15 @@ test "parse link" {
 
 test "parse list" {
     const content = "- Item one\n- Item two\n- Item three\n";
-    var a = testing.allocator;
+    const a = testing.allocator;
 
     var p = try Parser.init(a, content);
 
-    const root = try p.parse();
-    defer {
-        deinitNode(a, root);
-        a.destroy(root);
-    }
+    var res = try p.parse();
+    defer res.deinit(a);
+
+    const root = res.root;
+
     try testing.expect(root.* == .document);
 
     const doc = root.document;
