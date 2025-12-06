@@ -1,6 +1,6 @@
 const std = @import("std");
-const sgfs = @import("sgfs");
 const md = @import("markdown.zig");
+const gen = @import("generator.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -14,17 +14,16 @@ pub fn main() !void {
         return;
     }
 
-    const file = try std.fs.cwd().openFile(args[1], .{});
-    defer file.close();
-
-    const contents = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
-    defer alloc.free(contents);
-
-    var p = try md.Parser.init(alloc, contents);
-    var res = try p.parse();
-    defer res.deinit(alloc);
-
     if (std.mem.eql(u8, args[2], "-dump")) {
+        const file = try std.fs.cwd().openFile(args[1], .{});
+        defer file.close();
+
+        const contents = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
+        defer alloc.free(contents);
+
+        var p = try md.Parser.init(alloc, contents);
+        var res = try p.parse();
+        defer res.deinit(alloc);
         var out: std.io.Writer.Allocating = .init(alloc);
         try std.json.Stringify.value(res.root.document.children, .{ .whitespace = .indent_2 }, &out.writer);
         var arr = out.toArrayList();
@@ -32,6 +31,15 @@ pub fn main() !void {
 
         std.debug.print("\n{s}\n", .{arr.items});
     } else if (std.mem.eql(u8, args[2], "-html")) {
+        const file = try std.fs.cwd().openFile(args[1], .{});
+        defer file.close();
+
+        const contents = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
+        defer alloc.free(contents);
+
+        var p = try md.Parser.init(alloc, contents);
+        var res = try p.parse();
+
         var htmlOut: std.io.Writer.Allocating = .init(alloc);
         try res.root.toHtml(&htmlOut.writer);
 
@@ -39,5 +47,8 @@ pub fn main() !void {
         defer htmlContent.deinit(alloc);
 
         std.debug.print("{s}", .{htmlContent.items});
+    } else if (std.mem.eql(u8, args[2], "-gen")) {
+        var generator = gen.Generator.init(alloc, args[1], args[3]);
+        try generator.generate();
     }
 }

@@ -9,6 +9,8 @@ pub const NodeKind = enum {
     link,
     monotext,
     text,
+    bold,
+    italic,
 };
 
 pub const Node = union(NodeKind) {
@@ -25,6 +27,7 @@ pub const Node = union(NodeKind) {
         items: []const *Node,
     },
     codeBlock: struct {
+        language: []const u8,
         code: []const u8,
     },
     link: struct {
@@ -33,6 +36,8 @@ pub const Node = union(NodeKind) {
     },
     monotext: []const u8,
     text: []const u8,
+    bold: []const u8,
+    italic: []const u8,
 
     pub fn toHtml(self: *Node, out: *std.io.Writer) !void {
         switch (self.*) {
@@ -50,6 +55,25 @@ pub const Node = union(NodeKind) {
             .monotext => |c| {
                 try out.print("<code>{s}</code>", .{c});
             },
+            .list => |l| {
+                if (l.ordered) {
+                    try out.print("<ol>\n", .{});
+                } else {
+                    try out.print("<ul>\n", .{});
+                }
+
+                for (l.items) |item| {
+                    try out.print("<li>", .{});
+                    try item.toHtml(out);
+                    try out.print("</li>\n", .{});
+                }
+
+                if (l.ordered) {
+                    try out.print("</ol>\n", .{});
+                } else {
+                    try out.print("</ul>\n", .{});
+                }
+            },
             .link => |c| {
                 try out.print("<a href=\"{s}\">{s}</a>", .{ c.address, c.content });
             },
@@ -65,7 +89,12 @@ pub const Node = union(NodeKind) {
 
                 try out.print("</p>\n", .{});
             },
-            else => {},
+            .bold => |b| {
+                try out.print("<strong>{s}</strong>", .{b});
+            },
+            .italic => |i| {
+                try out.print("<em>{s}</em>", .{i});
+            },
         }
     }
 };
@@ -304,6 +333,31 @@ pub const Parser = struct {
                         p.loc += 1; // skip closing `
                     }
                 },
+                '*' => {
+                    p.loc += 1; // skip opening `
+                    if (p.curr() == '*') {
+                        p.loc += 1;
+                        const res = p.sliceUntilString("**");
+                        const node = try p.allocator.create(Node);
+                        errdefer p.allocator.destroy(node);
+                        node.* = .{ .bold = res.content };
+                        try nodes.append(p.allocator, node);
+
+                        p.loc += res.end + 2;
+                    } else {
+                        const res = p.sliceUntilChar('*');
+
+                        const node = try p.allocator.create(Node);
+                        errdefer p.allocator.destroy(node);
+                        node.* = .{ .italic = res.content };
+                        try nodes.append(p.allocator, node);
+
+                        p.loc += res.end;
+                        if (p.loc < p.content.len and p.curr() == '*') {
+                            p.loc += 1;
+                        }
+                    }
+                },
                 '\n' => {
                     p.loc += 1;
                     return nodes.toOwnedSlice(p.allocator);
@@ -311,7 +365,7 @@ pub const Parser = struct {
                 else => {
                     const start = p.loc;
 
-                    while (p.loc < p.content.len and (p.curr() != '\n' and p.curr() != '`' and p.curr() != '[')) {
+                    while (p.loc < p.content.len and (p.curr() != '\n' and p.curr() != '`' and p.curr() != '[' and p.curr() != '*')) {
                         p.loc += 1;
                     }
 
@@ -334,6 +388,10 @@ pub const Parser = struct {
     fn parseCodeNode(p: *Parser) !*Node {
         const node = try p.allocator.create(Node);
         errdefer p.allocator.destroy(node);
+        node.* = Node{ .codeBlock = .{
+            .language = "",
+            .code = "",
+        } };
 
         if (p.loc < p.content.len - 3) {
             const end = p.loc + 2;
@@ -346,7 +404,10 @@ pub const Parser = struct {
 
             p.loc += 1;
             if (p.content[p.loc] != '\n') {
-                return ParserError.WrongCodeBlock;
+                const res = p.sliceUntilChar('\n');
+                p.loc += res.end;
+
+                node.codeBlock.language = res.content;
             }
             p.loc += 1;
         }
@@ -359,9 +420,7 @@ pub const Parser = struct {
         const content = res.content[0 .. res.content.len - 1];
         p.loc += res.end + "```".len; // skip content and closing ```
 
-        node.* = Node{ .codeBlock = .{
-            .code = content,
-        } };
+        node.*.codeBlock.code = content;
         return node;
     }
 
@@ -550,4 +609,68 @@ test "parse list" {
     const item3 = list.list.items[2];
     try testing.expect(item3.* == .paragraph);
     try testing.expect(std.mem.eql(u8, item3.paragraph[0].text, "Item three"));
+}
+
+test "code block with language" {
+    const content = "```zig\nconst std = @import(\"std\");\n```";
+    const a = testing.allocator;
+
+    var p = try Parser.init(a, content);
+
+    var res = try p.parse();
+    defer res.deinit(a);
+
+    const root = res.root;
+
+    try testing.expect(root.* == .document);
+
+    const doc = root.document;
+    try testing.expect(doc.children.items.len == 1);
+
+    const cb = doc.children.items[0];
+    try testing.expect(cb.* == .codeBlock);
+    try testing.expect(std.mem.eql(u8, cb.codeBlock.language, "zig"));
+    try testing.expect(std.mem.eql(u8, cb.codeBlock.code, "const std = @import(\"std\");"));
+}
+
+test "bold and italic" {
+    const content = "This is **bold text** and *italic text*.\n";
+    const a = testing.allocator;
+
+    var p = try Parser.init(a, content);
+
+    var res = try p.parse();
+    defer res.deinit(a);
+
+    const root = res.root;
+
+    try testing.expect(root.* == .document);
+
+    const doc = root.document;
+    try testing.expect(doc.children.items.len == 1);
+
+    const pa = doc.children.items[0];
+    try testing.expect(pa.* == .paragraph);
+    std.debug.print("Paragraph nodes: {d}\n", .{pa.paragraph.len});
+    try testing.expect(pa.paragraph.len == 5); // text, bold, text, italic, text
+
+    const text1 = pa.paragraph[0];
+    try testing.expect(text1.* == .text);
+    try testing.expect(std.mem.eql(u8, text1.text, "This is "));
+
+    const bold = pa.paragraph[1];
+    try testing.expect(bold.* == .bold);
+    try testing.expect(std.mem.eql(u8, bold.bold, "bold text"));
+
+    const text2 = pa.paragraph[2];
+    try testing.expect(text2.* == .text);
+    try testing.expect(std.mem.eql(u8, text2.text, " and "));
+
+    const italic = pa.paragraph[3];
+    try testing.expect(italic.* == .italic);
+    try testing.expect(std.mem.eql(u8, italic.italic, "italic text"));
+
+    const text3 = pa.paragraph[4];
+    try testing.expect(text3.* == .text);
+    try testing.expect(std.mem.eql(u8, text3.text, "."));
 }
